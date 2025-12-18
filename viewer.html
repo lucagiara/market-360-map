@@ -5,18 +5,25 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>360 Viewer</title>
 
-  <!-- Pannellum (solid, lightweight 360 pano viewer) -->
+  <!-- Pannellum 360 viewer -->
   <link rel="stylesheet" href="https://unpkg.com/pannellum@2.5.6/build/pannellum.css"/>
   <script src="https://unpkg.com/pannellum@2.5.6/build/pannellum.js"></script>
 
   <style>
     html, body { height: 100%; margin: 0; background: #000; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; }
-    #topbar { position: fixed; top: 0; left: 0; right: 0; height: 44px; display:flex; align-items:center; gap:12px;
-              padding: 0 12px; background: rgba(0,0,0,0.75); color:#fff; z-index: 10; }
+    #topbar {
+      position: fixed; top: 0; left: 0; right: 0; height: 44px;
+      display:flex; align-items:center; gap:12px;
+      padding: 0 12px; background: rgba(0,0,0,0.75); color:#fff; z-index: 10;
+    }
     #viewer { position: absolute; top: 44px; left: 0; right: 0; bottom: 0; }
     a { color: #8ab4f8; text-decoration: none; }
     a:hover { text-decoration: underline; }
-    #msg { position: fixed; left: 12px; bottom: 12px; color:#fff; background: rgba(0,0,0,0.6); padding:10px 12px; border-radius: 10px; max-width: 520px; }
+    #msg {
+      position: fixed; left: 12px; bottom: 12px;
+      color:#fff; background: rgba(0,0,0,0.6);
+      padding:10px 12px; border-radius: 10px; max-width: 520px;
+    }
     code { color:#ddd; }
   </style>
 </head>
@@ -35,24 +42,24 @@
   const img = params.get("img");        // e.g. photos/R0010151.JPG
   const title = params.get("title") || "";
 
-  const msg = (html) => {
+  function showMsg(html) {
     const el = document.getElementById("msg");
     el.style.display = "block";
     el.innerHTML = html;
-  };
+  }
 
   if (!img) {
-    msg('Missing <code>?img=...</code>. Example: <code>viewer.html?img=photos/R0010151.JPG</code>');
+    showMsg('Missing <code>?img=...</code>. Example: <code>viewer.html?img=photos/R0010151.JPG</code>');
     throw new Error("Missing img param");
   }
 
-  // Build absolute URL for the image, relative to this viewer.html
+  // Make absolute URL relative to viewer.html
   const abs = new URL(img, location.href).toString();
 
   if (title) document.getElementById("t").textContent = title;
   document.getElementById("raw").href = abs;
 
-  // Quick preflight: try loading the image first, so we can show a helpful error (404, etc.)
+  // Preflight load so we can show a helpful error if it's 404 / missing
   const test = new Image();
   test.onload = () => {
     pannellum.viewer('viewer', {
@@ -64,13 +71,13 @@
     });
   };
   test.onerror = () => {
-    msg(
+    showMsg(
       `Could not load image:<br><code>${abs}</code><br><br>
-       Most common causes:<br>
-       • The file is not actually in <code>/photos/</code> in the repo<br>
-       • The URL in pins.json has a typo or different extension (JPG vs jpg)<br>
-       • GitHub Pages hasn’t finished deploying yet (wait 1–3 min and hard refresh)<br><br>
-       Try opening the raw image link above.`
+      Most common causes:<br>
+      • The file is NOT actually in <code>/photos/</code> in your repo<br>
+      • The URL has different case/extension (JPG vs jpg) — GitHub is case-sensitive<br>
+      • GitHub Pages hasn’t finished deploying yet (wait 1–3 minutes + refresh)<br><br>
+      Try clicking “Open raw image” above.`
     );
   };
   test.src = abs;
