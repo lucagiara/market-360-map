@@ -8,38 +8,37 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
-  <!-- Read GPS from local JPGs (authoring only) -->
+  <!-- GPS from local JPGs (author mode) -->
   <script src="https://unpkg.com/exifr/dist/full.umd.js"></script>
 
   <style>
-    body { margin: 0; font-family: system-ui, -apple-system, BlinkMacSystemFont; }
+    body { margin: 0; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; }
     #toolbar {
-      display: flex; align-items: center; gap: 10px;
+      display: flex; flex-direction: column; gap: 8px;
       padding: 10px; background: #f4f4f4; border-bottom: 1px solid #ccc;
-      flex-wrap: wrap;
     }
-    #map { height: calc(100vh - 92px); }
+    .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; width:100%; }
+    #map { height: calc(100vh - 112px); }
 
     button { padding: 6px 12px; font-size: 14px; cursor: pointer; }
     button:disabled { opacity: 0.5; cursor: default; }
-    input[type="text"] { padding: 6px 10px; font-size: 14px; width: 340px; max-width: 70vw; }
+    input[type="text"] { padding: 6px 10px; font-size: 14px; width: 360px; max-width: 80vw; }
     label { font-size: 13px; color: #333; }
     .hint { font-size: 12px; color: #666; }
     #status { margin-left: auto; font-size: 13px; color: #444; }
 
-    .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; width:100%; }
-    .pill {
-      padding: 3px 8px; border: 1px solid #bbb; border-radius: 999px;
-      font-size: 12px; background: #fff;
-    }
+    .pill { padding: 3px 8px; border: 1px solid #bbb; border-radius: 999px; font-size: 12px; background: #fff; }
+    .pill.on { border-color:#2c7; background:#eafff2; }
 
-    .popup-wrap { width: 280px; }
+    .popup-wrap { width: 290px; }
     .popup-title { font-weight: 650; margin-bottom: 6px; word-break: break-word; }
     .popup-sub { font-size: 12px; color:#555; margin-bottom: 8px; word-break: break-word; }
-    .popup-img { width: 100%; height: auto; border-radius: 8px; display: block; cursor: pointer; }
+    .popup-img { width: 100%; height: auto; border-radius: 10px; display: block; cursor: pointer; }
     .popup-actions { margin-top: 8px; display: flex; gap: 12px; flex-wrap: wrap; }
     .popup-actions a { text-decoration: none; font-size: 13px; }
     .popup-actions a:hover { text-decoration: underline; }
+
+    .danger { color:#b00; }
   </style>
 </head>
 
@@ -47,7 +46,7 @@
   <div id="toolbar">
     <div class="row">
       <strong>Market Street 360 Survey Map</strong>
-      <span class="hint">Shareable mode (GitHub): pins point to hosted image URLs.</span>
+      <span class="hint">GitHub mode: pins point to hosted URLs (usually <code>photos/&lt;filename&gt;</code>).</span>
       <div id="status">Loading…</div>
     </div>
 
@@ -70,8 +69,8 @@
 
     <div class="row">
       <label class="hint" style="display:flex; align-items:center; gap:8px;">
-        Choose Files: <input type="file" id="fileInput" accept=".jpg,.jpeg,image/jpeg" multiple />
-        <span class="hint">GPS photos auto-pin. No-GPS photos will ask you to click the map to place them.</span>
+        Author mode (optional): <input type="file" id="fileInput" accept=".jpg,.jpeg,image/jpeg" multiple />
+        <span class="hint">GPS photos auto-pin. No-GPS photos will ask you to click map to place them.</span>
       </label>
     </div>
   </div>
@@ -79,72 +78,65 @@
   <div id="map"></div>
 
   <script>
-    // =========================
-    // Config (GitHub Pages)
-    // =========================
+    // -------------------------
+    // Config
+    // -------------------------
     const PINS_JSON_URL = "./pins.json";
     const PHOTOS_BASE   = "./photos/";
+    const LOCAL_STORAGE_KEY = "market360_pins_shareable_v4";
 
-    // Draft edits stored locally (then you Export → commit to pins.json)
-    const LOCAL_STORAGE_KEY = "market360_pins_shareable_v2";
-
-    // =========================
-    // Map + baselayers
-    // =========================
+    // -------------------------
+    // Map + baselayers (keep the grey style you like)
+    // -------------------------
     const map = L.map("map").setView([37.7749, -122.4194], 13);
 
-    // Keep your preferred gray look
     const grayBase = L.tileLayer(
       "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
       { maxZoom: 20, attribution: "© OpenStreetMap contributors © CARTO" }
     ).addTo(map);
 
-    const aerialBase = L.tileLayer(
+    // Optional aerial toggle (does NOT change your default style)
+    const aerial = L.tileLayer(
       "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
       { maxZoom: 20, attribution: "Tiles © Esri" }
     );
+    L.control.layers({ "Base (gray)": grayBase, "Aerial": aerial }, {}, { position:"topright" }).addTo(map);
 
-    L.control.layers(
-      { "Light (default)": grayBase, "Aerial": aerialBase },
-      null,
-      { position: "topright", collapsed: true }
-    ).addTo(map);
-
-    // =========================
+    // -------------------------
     // UI elements
-    // =========================
-    const statusEl    = document.getElementById("status");
-    const modePill    = document.getElementById("modePill");
-    const urlInput    = document.getElementById("urlInput");
-    const titleInput  = document.getElementById("titleInput");
-    const force360El  = document.getElementById("force360");
-    const addPinBtn   = document.getElementById("addPinBtn");
-    const reloadBtn   = document.getElementById("reloadBtn");
-    const exportBtn   = document.getElementById("exportBtn");
-    const importBtn   = document.getElementById("importBtn");
+    // -------------------------
+    const status   = document.getElementById("status");
+    const urlInput = document.getElementById("urlInput");
+    const titleInput = document.getElementById("titleInput");
+    const force360 = document.getElementById("force360");
+    const addPinBtn = document.getElementById("addPinBtn");
+
+    const reloadBtn = document.getElementById("reloadBtn");
+    const exportBtn = document.getElementById("exportBtn");
+    const importBtn = document.getElementById("importBtn");
     const importInput = document.getElementById("importInput");
-    const clearBtn    = document.getElementById("clearBtn");
-    const fileInput   = document.getElementById("fileInput");
+    const clearBtn  = document.getElementById("clearBtn");
 
-    // =========================
+    const fileInput = document.getElementById("fileInput");
+    const modePill  = document.getElementById("modePill");
+
+    // -------------------------
     // State
-    // =========================
-    let pinData = [];
-    const markerById = new Map();
-    let mode = null; // {type:"place-new", pinDraft} or {type:"edit", pinId}
-    let manualQueue = []; // pins waiting for click placement
+    // -------------------------
+    let pinData = [];                 // array of pins
+    const markerById = new Map();     // id -> Leaflet marker
+    let mode = null;                  // {type:'place-new'|'edit', ...}
 
-    // Prevent multi-tab opens
-    let lastOpenTs = 0;
-    function canOpenNow() {
-      const now = Date.now();
-      if (now - lastOpenTs < 650) return false;
-      lastOpenTs = now;
-      return true;
-    }
+    // session-only previews for local files (won't survive refresh)
+    const previewUrlByHosted = new Map(); // hostedUrl -> blob url
+    const isPanoByHosted = new Map();     // hostedUrl -> true/false (from local detection)
+    const sessionObjectUrls = [];
 
-    function escapeHtml(str) {
-      return String(str)
+    // -------------------------
+    // Helpers
+    // -------------------------
+    function escapeHtml(s) {
+      return String(s ?? "")
         .replaceAll("&", "&amp;")
         .replaceAll("<", "&lt;")
         .replaceAll(">", "&gt;")
@@ -153,268 +145,352 @@
     }
 
     function ensureId() {
-      if (crypto && crypto.randomUUID) return crypto.randomUUID();
-      return String(Date.now()) + "_" + Math.random();
+      return "pin_" + Math.random().toString(36).slice(2, 10) + "_" + Date.now().toString(36);
+    }
+
+    function normalizeToHostedUrl(input) {
+      const raw = (input || "").trim();
+      if (!raw) return null;
+      if (/^https?:\/\//i.test(raw)) return raw;           // full URL
+      if (raw.startsWith("./") || raw.startsWith("../") || raw.startsWith("/")) return raw; // path
+      if (raw.startsWith("photos/")) return "./" + raw;    // repo-relative
+      return PHOTOS_BASE + raw;                            // just filename -> ./photos/<name>
     }
 
     function setMode(nextMode) {
       mode = nextMode;
-
       if (!mode) {
         modePill.style.display = "none";
-        map.getContainer().style.cursor = "";
+        modePill.classList.remove("on");
         return;
       }
-
-      modePill.style.display = "inline-block";
-      map.getContainer().style.cursor = "crosshair";
-
-      if (mode.type === "place-new") {
-        const t = mode.pinDraft?.title || mode.pinDraft?.name || "photo";
-        modePill.textContent = `Click map to place: ${t}  (Esc cancels)`;
-      } else if (mode.type === "edit") {
-        modePill.textContent = "Click new location (Esc cancels)";
-      }
+      modePill.style.display = "inline-flex";
+      modePill.classList.add("on");
+      modePill.textContent =
+        mode.type === "place-new" ? `Click map to place: ${mode.title || mode.fileName || "photo"}` :
+        mode.type === "edit" ? `Click map to move pin` :
+        `Mode`;
     }
 
-    function saveLocalDraftPins() {
+    function saveLocalPins() {
       localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(pinData));
     }
 
-    function loadLocalDraftPins() {
+    function loadLocalPins() {
       try {
         const raw = localStorage.getItem(LOCAL_STORAGE_KEY);
-        const parsed = raw ? JSON.parse(raw) : null;
-        if (Array.isArray(parsed)) return parsed;
-      } catch {}
-      return null;
+        if (!raw) return false;
+        const arr = JSON.parse(raw);
+        if (!Array.isArray(arr)) return false;
+        pinData = arr.filter(p => p && typeof p.lat === "number" && typeof p.lng === "number");
+        return true;
+      } catch { return false; }
     }
 
     function removeAllMarkers() {
-      markerById.forEach(m => map.removeLayer(m));
+      for (const m of markerById.values()) m.remove();
       markerById.clear();
     }
 
-    function normalizeUrlOrFilename(input) {
-      const v = (input || "").trim();
-      if (!v) return null;
-
-      // If user types just "R0010254.JPG", use PHOTOS_BASE
-      if (!v.includes("/") && !v.startsWith("http://") && !v.startsWith("https://")) {
-        return PHOTOS_BASE + encodeURIComponent(v);
-      }
-
-      return v;
+    function revokeSessionUrls() {
+      for (const u of sessionObjectUrls) URL.revokeObjectURL(u);
+      sessionObjectUrls.length = 0;
+      previewUrlByHosted.clear();
+      isPanoByHosted.clear();
     }
 
-    async function detectPanoramaFromUrl(url) {
+    async function detectPanorama(blobUrl) {
+      // equirectangular usually ~2:1 aspect ratio
       return new Promise((resolve) => {
         const img = new Image();
         img.onload = () => {
           const w = img.naturalWidth || img.width;
           const h = img.naturalHeight || img.height;
           if (!w || !h) return resolve(false);
-          const ratio = w / h;
-          resolve(ratio > 1.85 && ratio < 2.15);
+          const r = w / h;
+          resolve(r > 1.85 && r < 2.15);
         };
         img.onerror = () => resolve(false);
-        img.src = url;
+        img.src = blobUrl;
       });
     }
 
-    function openPannellumViewer(url, title) {
-      if (!canOpenNow()) return;
+    function is360ForPin(pin) {
+      // strongest signal: explicit flag saved in pin
+      if (pin && pin.is360 === true) return true;
+      if (pin && pin.force360 === true) return true;
 
-      const safeTitle = escapeHtml(title || "360 Photo");
-      const viewerUrl = url;
+      // if we have local detection for this hostedUrl (author session)
+      if (pin && pin.url && isPanoByHosted.get(pin.url) === true) return true;
 
+      return false;
+    }
+
+    // -------------------------
+    // 360 Viewer in NEW TAB (bubble view)
+    // -------------------------
+    function open360ViewerInNewTab(imageUrl, titleText) {
+      // Important: open synchronously (in direct click) to avoid popup blockers
       const w = window.open("", "_blank");
       if (!w) {
         alert("Popup blocked. Please allow popups for this site.");
         return;
       }
 
-      const html =
-        '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8" />' +
-        '<meta name="viewport" content="width=device-width, initial-scale=1" />' +
-        '<title>' + safeTitle + '</title>' +
-        '<link rel="stylesheet" href="https://unpkg.com/pannellum/build/pannellum.css"/>' +
-        '<style>html,body{height:100%;margin:0;background:#000;}#pano{width:100%;height:100%;}' +
-        '#topbar{position:fixed;top:10px;left:10px;z-index:9999;display:flex;gap:10px;align-items:center;' +
-        'padding:8px 10px;border-radius:10px;background:rgba(0,0,0,0.55);color:#fff;font-family:system-ui;' +
-        'font-size:13px;}#topbar a{color:#fff;text-decoration:underline;}</style>' +
-        '</head><body>' +
-        '<div id="topbar"><div>' + safeTitle + '</div><a href="' + viewerUrl + '" target="_blank">Open raw image</a></div>' +
-        '<div id="pano"></div>' +
-        '<script src="https://unpkg.com/pannellum/build/pannellum.js"><\/script>' +
-        '<script>pannellum.viewer("pano",{type:"equirectangular",panorama:' + JSON.stringify(viewerUrl) +
-        ',autoLoad:true,showZoomCtrl:true,showFullscreenCtrl:true});<\/script>' +
-        '</body></html>';
+      const safeTitle = escapeHtml(titleText || "360 Photo");
+      const safeUrl = escapeHtml(imageUrl);
 
       w.document.open();
-      w.document.write(html);
+      w.document.write(`<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>${safeTitle}</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/pannellum@2.5.6/build/pannellum.css" />
+  <style>
+    html, body { margin:0; height:100%; width:100%; background:#111; font-family: system-ui, -apple-system, BlinkMacSystemFont, Arial; }
+    #topbar {
+      position: fixed; left: 10px; top: 10px; z-index: 10;
+      display:flex; gap:10px; align-items:center; flex-wrap:wrap;
+      background: rgba(0,0,0,0.55); color:#fff; padding:8px 10px; border-radius:10px;
+    }
+    #topbar a { color:#fff; text-decoration:none; font-size:13px; opacity:0.9; }
+    #topbar a:hover { text-decoration:underline; opacity:1; }
+    #panorama { height:100%; width:100%; }
+    .title { font-weight:650; font-size:13px; }
+  </style>
+</head>
+<body>
+  <div id="topbar">
+    <div class="title">${safeTitle}</div>
+    <a href="${safeUrl}" target="_blank" rel="noopener">Open raw image</a>
+  </div>
+  <div id="panorama"></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/pannellum@2.5.6/build/pannellum.js"></script>
+  <script>
+    const imgUrl = ${JSON.stringify(imageUrl)};
+    pannellum.viewer('panorama', {
+      type: 'equirectangular',
+      panorama: imgUrl,
+      autoLoad: true,
+      showZoomCtrl: true,
+      compass: false
+    });
+  </script>
+</body>
+</html>`);
       w.document.close();
     }
 
-    function findPinByUrl(url) {
-      return pinData.find(p => p && p.url === url) || null;
-    }
-
+    // -------------------------
+    // Popup HTML
+    // -------------------------
     function buildPopupHtml(pin) {
-      const safeTitle = escapeHtml(pin.title || pin.name || "Photo");
-      const safeUrl   = escapeHtml(pin.url || "");
-      const isPano    = !!pin.isPano;
+      const title = escapeHtml(pin.title || pin.fileName || "Photo");
+      const url = pin.url ? String(pin.url) : "";
+      const safeUrl = escapeHtml(url);
 
-      const openPrimary = isPano
-        ? '<a href="#" data-action="open360" data-id="' + pin.id + '">Open 360 viewer (new tab)</a>'
-        : '<a href="' + safeUrl + '" target="_blank" rel="noopener">Open full screen (new tab)</a>';
+      const hasHostedUrl = !!url;
+      const localPreview = hasHostedUrl ? previewUrlByHosted.get(url) : null;
 
-      const panoHint = isPano
-        ? '<div class="hint">Detected/marked as 360 panorama (equirectangular).</div>'
-        : '';
+      const pano = is360ForPin(pin);
 
-      return ''
-        + '<div class="popup-wrap">'
-        +   '<div class="popup-title">' + safeTitle + '</div>'
-        +   '<div class="popup-sub">' + safeUrl + '</div>'
-        +   '<img class="popup-img" src="' + safeUrl + '" alt="' + safeTitle + '" data-action="' + (isPano ? 'open360' : 'openraw') + '" />'
-        +   '<div class="popup-actions">'
-        +     openPrimary
-        +     '<a href="#" data-action="editLoc" data-id="' + pin.id + '">Edit location</a>'
-        +     '<a href="#" data-action="editMeta" data-id="' + pin.id + '">Edit title/url</a>'
-        +   '</div>'
-        +   panoHint
-        + '</div>';
+      // Decide what image we can actually show in popup:
+      // - If we have a local blob preview (author session), use it
+      // - Otherwise use hosted URL (GitHub)
+      const imgSrc = localPreview || (hasHostedUrl ? url : null);
+
+      const note = !imgSrc
+        ? `<div class="popup-sub danger">No preview available.</div>`
+        : (!localPreview
+            ? `<div class="popup-sub">If you see 404, make sure the image exists at <code>${safeUrl}</code> in your repo.</div>`
+            : `<div class="popup-sub">Local preview (session). Hosted URL: <code>${safeUrl}</code></div>`
+          );
+
+      const actions = `
+        <div class="popup-actions">
+          ${pano && imgSrc ? `<a href="#" data-action="open360" data-url="${escapeHtml(imgSrc)}" data-title="${title}">Open 360 viewer (new tab)</a>` : ""}
+          ${imgSrc ? `<a href="${escapeHtml(imgSrc)}" target="_blank" rel="noopener">Open raw image</a>` : ""}
+          <a href="#" data-action="edit" data-id="${escapeHtml(pin.id)}">Edit location</a>
+        </div>
+      `;
+
+      return `
+        <div class="popup-wrap">
+          <div class="popup-title">${title}</div>
+          ${note}
+          ${imgSrc ? `<img class="popup-img" src="${escapeHtml(imgSrc)}" alt="${title}" data-action="${pano ? "open360" : "openraw"}" data-url="${escapeHtml(imgSrc)}" data-title="${title}">` : ""}
+          ${pano ? `<div class="popup-sub">Detected/marked as 360 panorama.</div>` : ""}
+          ${actions}
+        </div>
+      `;
     }
 
+    // -------------------------
+    // Markers
+    // -------------------------
     function addOrUpdateMarker(pin) {
+      const popupHtml = buildPopupHtml(pin);
       const existing = markerById.get(pin.id);
-      const html = buildPopupHtml(pin);
-
       if (existing) {
         existing.setLatLng([pin.lat, pin.lng]);
-        existing.setPopupContent(html);
+        existing.setPopupContent(popupHtml);
         return existing;
       }
-
-      const m = L.marker([pin.lat, pin.lng]).addTo(map).bindPopup(html);
-      markerById.set(pin.id, m);
-      return m;
+      const marker = L.marker([pin.lat, pin.lng]).addTo(map).bindPopup(popupHtml);
+      markerById.set(pin.id, marker);
+      return marker;
     }
 
-    function renderAllPins({ fit = false } = {}) {
+    function renderAllPins(fit = false) {
       removeAllMarkers();
+      for (const p of pinData) addOrUpdateMarker(p);
 
-      for (const pin of pinData) {
-        if (!pin || typeof pin.lat !== "number" || typeof pin.lng !== "number" || !pin.url) continue;
-        addOrUpdateMarker(pin);
-      }
-
-      const count = markerById.size;
-      statusEl.textContent = count ? `${count} pin(s) loaded` : "No pins loaded";
-
-      if (fit && count) {
+      status.textContent = `${pinData.length} pin(s) loaded`;
+      if (fit && pinData.length) {
         const group = L.featureGroup([...markerById.values()]);
         map.fitBounds(group.getBounds().pad(0.2));
       }
     }
 
-    async function loadPinsFromPinsJson() {
-      statusEl.textContent = "Loading pins.json…";
+    // -------------------------
+    // Load pins.json (GitHub) OR Local cache
+    // -------------------------
+    async function loadFromPinsJson() {
       try {
-        const resp = await fetch(PINS_JSON_URL, { cache: "no-store" });
-        if (!resp.ok) throw new Error("Could not fetch pins.json");
-        const data = await resp.json();
-        if (!Array.isArray(data)) throw new Error("pins.json must be an array");
-        return data;
+        const res = await fetch(PINS_JSON_URL, { cache: "no-store" });
+        if (!res.ok) throw new Error("pins.json not found");
+        const arr = await res.json();
+        if (!Array.isArray(arr)) throw new Error("pins.json invalid");
+        pinData = arr
+          .filter(p => p && typeof p.lat === "number" && typeof p.lng === "number" && p.url)
+          .map(p => ({
+            id: String(p.id || ensureId()),
+            lat: p.lat,
+            lng: p.lng,
+            url: String(p.url),
+            title: p.title ? String(p.title) : "",
+            fileName: p.fileName ? String(p.fileName) : "",
+            is360: p.is360 === true,
+            force360: p.force360 === true,
+            ts: p.ts || Date.now()
+          }));
+        saveLocalPins();
+        renderAllPins(true);
+        status.textContent = `${pinData.length} pin(s) loaded`;
       } catch (e) {
-        console.warn(e);
-        return null;
+        // fallback to local storage
+        const ok = loadLocalPins();
+        renderAllPins(true);
+        status.textContent = ok ? `${pinData.length} pin(s) loaded (local)` : "No pins loaded yet";
       }
     }
 
-    function cleanPins(arr) {
-      return (arr || [])
-        .filter(p => p && typeof p.lat === "number" && typeof p.lng === "number" && typeof p.url === "string")
-        .map(p => ({
-          id: p.id || ensureId(),
-          name: String(p.name || p.title || "Photo"),
-          title: p.title ? String(p.title) : "",
-          url: String(p.url),
-          lat: p.lat,
-          lng: p.lng,
-          isPano: !!p.isPano,
-          ts: p.ts || Date.now()
-        }));
-    }
+    // -------------------------
+    // Add pin flow (manual)
+    // -------------------------
+    addPinBtn.addEventListener("click", () => {
+      const hostedUrl = normalizeToHostedUrl(urlInput.value);
+      if (!hostedUrl) { alert("Enter a photo URL or filename first."); return; }
+      setMode({
+        type: "place-new",
+        url: hostedUrl,
+        title: titleInput.value.trim(),
+        fileName: hostedUrl.split("/").pop(),
+        is360: force360.checked === true,
+        force360: force360.checked === true
+      });
+      status.textContent = `Click map to place pin for: ${hostedUrl}`;
+    });
 
-    async function bootLoadPins() {
-      const localDraft = loadLocalDraftPins();
-      if (localDraft && localDraft.length) {
-        pinData = cleanPins(localDraft);
-        renderAllPins({ fit: true });
-        return;
-      }
+    map.on("click", (evt) => {
+      if (!mode) return;
+      const { lat, lng } = evt.latlng;
 
-      const fromJson = await loadPinsFromPinsJson();
-      if (fromJson) {
-        pinData = cleanPins(fromJson);
-        saveLocalDraftPins();
-        renderAllPins({ fit: true });
-        return;
-      }
-
-      pinData = [];
-      renderAllPins();
-      statusEl.textContent = "No pins loaded (no local draft, and pins.json missing/unreachable)";
-    }
-
-    function startManualQueue(queueItems) {
-      manualQueue = queueItems.slice();
-
-      if (!manualQueue.length) {
+      if (mode.type === "place-new") {
+        const pin = {
+          id: ensureId(),
+          lat, lng,
+          url: mode.url,
+          title: mode.title || "",
+          fileName: mode.fileName || "",
+          is360: mode.is360 === true,
+          force360: mode.force360 === true,
+          ts: Date.now()
+        };
+        pinData.push(pin);
+        saveLocalPins();
+        renderAllPins(false);
+        markerById.get(pin.id)?.openPopup();
         setMode(null);
+        status.textContent = `Pinned: ${pin.fileName || pin.url}`;
+        map.setView([lat, lng], Math.max(map.getZoom(), 18));
         return;
       }
 
-      const next = manualQueue.shift();
-      setMode({ type: "place-new", pinDraft: next });
-      statusEl.textContent = `No GPS: click map to place "${next.name}" (${manualQueue.length + 1} remaining)`;
-    }
-
-    function continueManualQueueIfAny() {
-      if (!manualQueue.length) {
+      if (mode.type === "edit") {
+        const idx = pinData.findIndex(p => p.id === mode.pinId);
+        if (idx < 0) { setMode(null); return; }
+        pinData[idx].lat = lat;
+        pinData[idx].lng = lng;
+        saveLocalPins();
+        renderAllPins(false);
+        markerById.get(pinData[idx].id)?.openPopup();
         setMode(null);
-        statusEl.textContent = "Manual placement complete.";
+        status.textContent = `Moved pin: ${pinData[idx].fileName || pinData[idx].url}`;
+        map.setView([lat, lng], Math.max(map.getZoom(), 18));
         return;
       }
-      const next = manualQueue.shift();
-      setMode({ type: "place-new", pinDraft: next });
-      statusEl.textContent = `No GPS: click map to place "${next.name}" (${manualQueue.length + 1} remaining)`;
-    }
+    });
 
-    // =========================
-    // Events
-    // =========================
+    // ESC cancels mode
     window.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") {
-        manualQueue = [];
-        setMode(null);
-        statusEl.textContent = "Cancelled.";
-      }
+      if (e.key === "Escape") setMode(null);
     });
 
-    reloadBtn.addEventListener("click", async () => {
-      const fromJson = await loadPinsFromPinsJson();
-      if (!fromJson) {
-        alert("Could not load pins.json. Make sure it exists in your repo root.");
+    // -------------------------
+    // Single global click handler (fixes 3-tabs bug)
+    // -------------------------
+    document.addEventListener("click", (evt) => {
+      const el = evt.target.closest("[data-action]");
+      if (!el) return;
+
+      const action = el.getAttribute("data-action");
+
+      if (action === "edit") {
+        evt.preventDefault();
+        const id = el.getAttribute("data-id");
+        if (!id) return;
+        setMode({ type: "edit", pinId: id });
+        status.textContent = "Click map to set new location…";
         return;
       }
-      pinData = cleanPins(fromJson);
-      saveLocalDraftPins();
-      renderAllPins({ fit: true });
+
+      if (action === "open360") {
+        evt.preventDefault();
+        evt.stopPropagation();
+        const url = el.getAttribute("data-url");
+        const title = el.getAttribute("data-title") || "360 Photo";
+        if (!url) return;
+        open360ViewerInNewTab(url, title);
+        return;
+      }
+
+      if (action === "openraw") {
+        // let normal behavior happen (it’s an <img> click though)
+        // open raw in new tab for convenience
+        evt.preventDefault();
+        const url = el.getAttribute("data-url");
+        if (url) window.open(url, "_blank", "noopener");
+        return;
+      }
     });
 
+    // -------------------------
+    // Export / Import / Clear
+    // -------------------------
     exportBtn.addEventListener("click", () => {
       const blob = new Blob([JSON.stringify(pinData, null, 2)], { type: "application/json" });
       const url = URL.createObjectURL(blob);
@@ -428,23 +504,30 @@
     });
 
     importBtn.addEventListener("click", () => importInput.click());
-
     importInput.addEventListener("change", async (e) => {
-      const file = e.target.files[0];
-      if (!file) return;
+      const f = e.target.files[0];
+      if (!f) return;
       try {
-        const text = await file.text();
-        const imported = JSON.parse(text);
-        if (!Array.isArray(imported)) {
-          alert("Invalid JSON format. Expected an array.");
-          return;
-        }
-        pinData = cleanPins(imported);
-        saveLocalDraftPins();
-        renderAllPins({ fit: true });
-        statusEl.textContent = `Imported ${pinData.length} pin(s)`;
-      } catch (err) {
-        console.error(err);
+        const txt = await f.text();
+        const arr = JSON.parse(txt);
+        if (!Array.isArray(arr)) throw new Error("Invalid");
+        pinData = arr
+          .filter(p => p && typeof p.lat === "number" && typeof p.lng === "number" && p.url)
+          .map(p => ({
+            id: String(p.id || ensureId()),
+            lat: p.lat,
+            lng: p.lng,
+            url: String(p.url),
+            title: p.title ? String(p.title) : "",
+            fileName: p.fileName ? String(p.fileName) : "",
+            is360: p.is360 === true,
+            force360: p.force360 === true,
+            ts: p.ts || Date.now()
+          }));
+        saveLocalPins();
+        renderAllPins(true);
+        status.textContent = `Imported ${pinData.length} pin(s)`;
+      } catch {
         alert("Could not import JSON.");
       } finally {
         importInput.value = "";
@@ -452,270 +535,118 @@
     });
 
     clearBtn.addEventListener("click", () => {
-      if (!confirm("Clear local draft pins (does not delete pins.json on GitHub)?")) return;
+      if (!confirm("Clear local pins + session previews?")) return;
+      revokeSessionUrls();
       pinData = [];
-      saveLocalDraftPins();
-      renderAllPins();
+      saveLocalPins();
+      removeAllMarkers();
+      status.textContent = "No pins loaded yet";
+      setMode(null);
+      fileInput.value = "";
     });
 
-    addPinBtn.addEventListener("click", async () => {
-      const url = normalizeUrlOrFilename(urlInput.value);
-      if (!url) {
-        alert("Type a photo URL or filename first.");
-        return;
-      }
-
-      const title = (titleInput.value || "").trim();
-      let isPano = force360El.checked;
-
-      if (!isPano) {
-        statusEl.textContent = "Detecting 360…";
-        isPano = await detectPanoramaFromUrl(url);
-      }
-
-      setMode({ type: "place-new", pinDraft: {
-        id: ensureId(),
-        name: title || (url.split("/").pop() || "Photo"),
-        title,
-        url,
-        isPano
-      }});
-      statusEl.textContent = "Click map to place the pin…";
+    reloadBtn.addEventListener("click", async () => {
+      await loadFromPinsJson();
     });
 
-    map.on("popupopen", (e) => {
-      const el = e.popup.getElement();
-      if (!el) return;
-      if (el.dataset.boundClick === "1") return;
-      el.dataset.boundClick = "1";
-
-      el.addEventListener("click", (evt) => {
-        const img = evt.target?.classList?.contains("popup-img") ? evt.target : null;
-        const a = evt.target.closest ? evt.target.closest("a") : null;
-
-        if (img) {
-          evt.preventDefault();
-          evt.stopPropagation();
-
-          const idEl = el.querySelector('a[data-action="editLoc"]');
-          const pinId = idEl ? idEl.getAttribute("data-id") : null;
-          const pin = pinData.find(p => p.id === pinId);
-          if (!pin) return;
-
-          const action = img.getAttribute("data-action");
-          if (action === "open360") {
-            openPannellumViewer(pin.url, pin.title || pin.name);
-          } else {
-            if (!canOpenNow()) return;
-            window.open(pin.url, "_blank");
-          }
-          return;
-        }
-
-        if (!a) return;
-        const actionA = a.getAttribute("data-action");
-        const id = a.getAttribute("data-id");
-        const pin = pinData.find(p => p.id === id);
-        if (!pin) return;
-
-        if (actionA === "open360") {
-          evt.preventDefault();
-          evt.stopPropagation();
-          openPannellumViewer(pin.url, pin.title || pin.name);
-          return;
-        }
-
-        if (actionA === "editLoc") {
-          evt.preventDefault();
-          evt.stopPropagation();
-          manualQueue = [];
-          setMode({ type: "edit", pinId: id });
-          e.popup.close();
-          return;
-        }
-
-        if (actionA === "editMeta") {
-          evt.preventDefault();
-          evt.stopPropagation();
-          const newTitle = prompt("Title (optional):", pin.title || "");
-          if (newTitle === null) return;
-
-          const newUrl = prompt("Image URL (or filename):", pin.url || "");
-          if (newUrl === null) return;
-
-          const normalized = normalizeUrlOrFilename(newUrl);
-          if (!normalized) return;
-
-          pin.title = (newTitle || "").trim();
-          pin.url = normalized;
-
-          saveLocalDraftPins();
-          renderAllPins();
-          const marker = markerById.get(pin.id);
-          if (marker) marker.openPopup();
-          return;
-        }
-      });
-    });
-
-    map.on("click", async (evt) => {
-      if (!mode) return;
-
-      const { lat, lng } = evt.latlng;
-
-      if (mode.type === "place-new") {
-        const d = mode.pinDraft;
-        if (!d || !d.url) { setMode(null); return; }
-
-        // If a pin with same URL already exists, treat this as "set location" (avoid duplicates)
-        const existing = findPinByUrl(d.url);
-        if (existing) {
-          existing.lat = lat;
-          existing.lng = lng;
-          existing.title = d.title || existing.title;
-          existing.isPano = (typeof d.isPano === "boolean") ? d.isPano : existing.isPano;
-          existing.ts = Date.now();
-          saveLocalDraftPins();
-          renderAllPins();
-          setMode(null);
-          const marker = markerById.get(existing.id);
-          if (marker) marker.openPopup();
-          statusEl.textContent = `Placed existing photo: "${existing.name}"`;
-          continueManualQueueIfAny();
-          return;
-        }
-
-        const pin = {
-          id: d.id || ensureId(),
-          name: d.name || (d.url.split("/").pop() || "Photo"),
-          title: (d.title || "").trim(),
-          url: d.url,
-          lat, lng,
-          isPano: !!d.isPano,
-          ts: Date.now()
-        };
-
-        pinData.push(pin);
-        saveLocalDraftPins();
-        renderAllPins();
-        setMode(null);
-
-        const marker = markerById.get(pin.id);
-        if (marker) marker.openPopup();
-
-        statusEl.textContent = `Pinned "${pin.name}"`;
-        map.setView([lat, lng], Math.max(map.getZoom(), 18));
-
-        // If this came from the no-GPS queue, proceed to next
-        continueManualQueueIfAny();
-        return;
-      }
-
-      if (mode.type === "edit") {
-        const idx = pinData.findIndex(p => p.id === mode.pinId);
-        if (idx < 0) { setMode(null); return; }
-
-        pinData[idx].lat = lat;
-        pinData[idx].lng = lng;
-
-        saveLocalDraftPins();
-        renderAllPins();
-        setMode(null);
-
-        const marker = markerById.get(pinData[idx].id);
-        if (marker) marker.openPopup();
-
-        statusEl.textContent = "Location updated.";
-        map.setView([lat, lng], Math.max(map.getZoom(), 18));
-      }
-    });
-
-    // =========================
-    // Choose Files: GPS auto-pin + No-GPS -> click-to-place queue
-    // =========================
+    // -------------------------
+    // Author mode: choose local JPGs
+    // - GPS => pin automatically (hosted URL set to ./photos/<filename>)
+    // - no GPS => queue -> click map to place (automatic flow)
+    // - detect 360 by aspect ratio for those local files, and store is360 on pin
+    // -------------------------
     fileInput.addEventListener("change", async (event) => {
       const files = Array.from(event.target.files || []);
       if (!files.length) return;
 
       let addedGps = 0;
-      let queuedManual = 0;
+      const needsManual = [];
 
-      const queue = [];
+      // Build session previews + detect pano ratio once
+      for (const file of files) {
+        const hostedUrl = PHOTOS_BASE + file.name; // where it should live on GitHub
+        const blobUrl = URL.createObjectURL(file);
+        sessionObjectUrls.push(blobUrl);
+        previewUrlByHosted.set(hostedUrl, blobUrl);
+
+        const pano = await detectPanorama(blobUrl);
+        isPanoByHosted.set(hostedUrl, pano);
+      }
 
       for (const file of files) {
-        const name = file.name;
-        const hostedUrl = PHOTOS_BASE + encodeURIComponent(name);
-
-        // Detect pano (best-effort) using hosted URL
-        let isPano = false;
-        try { isPano = await detectPanoramaFromUrl(hostedUrl); } catch {}
+        const hostedUrl = PHOTOS_BASE + file.name;
+        const title = file.name;
 
         try {
           const gps = await exifr.gps(file);
+          const pano = isPanoByHosted.get(hostedUrl) === true;
+
           if (gps && gps.latitude && gps.longitude) {
-            // If already exists (same hosted url), update coords instead of duplicating
-            const existing = findPinByUrl(hostedUrl);
-            if (existing) {
-              existing.lat = gps.latitude;
-              existing.lng = gps.longitude;
-              existing.isPano = isPano;
-              existing.ts = Date.now();
-            } else {
-              pinData.push({
-                id: ensureId(),
-                name,
-                title: "",
-                url: hostedUrl,
-                lat: gps.latitude,
-                lng: gps.longitude,
-                isPano,
-                ts: Date.now()
-              });
-            }
+            const pin = {
+              id: ensureId(),
+              lat: gps.latitude,
+              lng: gps.longitude,
+              url: hostedUrl,
+              title,
+              fileName: file.name,
+              is360: pano,
+              force360: false,
+              ts: Date.now()
+            };
+            pinData.push(pin);
             addedGps++;
           } else {
-            queue.push({
-              id: ensureId(),
-              name,
-              title: "",
-              url: hostedUrl,
-              isPano
-            });
-            queuedManual++;
+            needsManual.push({ hostedUrl, title, fileName: file.name, is360: pano });
           }
         } catch {
-          queue.push({
-            id: ensureId(),
-            name,
-            title: "",
-            url: hostedUrl,
-            isPano
-          });
-          queuedManual++;
+          const pano = isPanoByHosted.get(hostedUrl) === true;
+          needsManual.push({ hostedUrl, title, fileName: file.name, is360: pano });
         }
       }
 
-      saveLocalDraftPins();
-      renderAllPins({ fit: true });
+      saveLocalPins();
+      renderAllPins(true);
 
-      if (addedGps && !queuedManual) {
-        statusEl.textContent = `Added/updated ${addedGps} GPS pin(s).`;
-      } else if (addedGps && queuedManual) {
-        statusEl.textContent = `Added/updated ${addedGps} GPS pin(s). ${queuedManual} need manual placement.`;
-      } else if (!addedGps && queuedManual) {
-        statusEl.textContent = `${queuedManual} photo(s) have no GPS. Click map to place them.`;
+      if (addedGps) status.textContent = `${addedGps} photo(s) pinned from GPS`;
+      if (needsManual.length) {
+        // Queue placement automatically (no extra input boxes)
+        let queue = needsManual.slice();
+        const placeNext = () => {
+          if (!queue.length) {
+            status.textContent = "Manual placement complete.";
+            setMode(null);
+            return;
+          }
+          const next = queue.shift();
+          setMode({
+            type: "place-new",
+            url: next.hostedUrl,
+            title: next.title,
+            fileName: next.fileName,
+            is360: next.is360 === true,
+            force360: false
+          });
+          status.textContent = `No GPS for ${needsManual.length} file(s). Click map to place: ${next.fileName}`;
+        };
+        // After each placement, map click handler finishes and clears mode; detect that and continue
+        const watch = setInterval(() => {
+          if (!mode) {
+            clearInterval(watch);
+            // continue
+            setTimeout(() => placeNext(), 50);
+          }
+        }, 100);
+        placeNext();
       }
-
-      // Start manual placement queue automatically
-      if (queue.length) {
-        startManualQueue(queue);
-      }
-
-      fileInput.value = "";
     });
 
-    // Boot
-    bootLoadPins();
+    // -------------------------
+    // Init
+    // -------------------------
+    (async () => {
+      setMode(null);
+      await loadFromPinsJson();
+    })();
   </script>
 </body>
 </html>
