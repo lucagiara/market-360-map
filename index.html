@@ -8,7 +8,7 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
-  <!-- Optional (authoring only): read GPS from local JPGs -->
+  <!-- Read GPS from local JPGs (authoring only) -->
   <script src="https://unpkg.com/exifr/dist/full.umd.js"></script>
 
   <style>
@@ -70,8 +70,8 @@
 
     <div class="row">
       <label class="hint" style="display:flex; align-items:center; gap:8px;">
-        Author mode (optional): <input type="file" id="fileInput" accept=".jpg,.jpeg,image/jpeg" multiple />
-        <span class="hint">Reads GPS from local JPGs and creates pins using hosted URL = <code>photos/&lt;filename&gt;</code></span>
+        Choose Files: <input type="file" id="fileInput" accept=".jpg,.jpeg,image/jpeg" multiple />
+        <span class="hint">GPS photos auto-pin. No-GPS photos will ask you to click the map to place them.</span>
       </label>
     </div>
   </div>
@@ -82,17 +82,18 @@
     // =========================
     // Config (GitHub Pages)
     // =========================
-    const PINS_JSON_URL = "./pins.json";       // commit this file
-    const PHOTOS_BASE   = "./photos/";         // folder in repo containing images
+    const PINS_JSON_URL = "./pins.json";
+    const PHOTOS_BASE   = "./photos/";
 
-    // Local storage (draft edits before you export+commit)
-    const LOCAL_STORAGE_KEY = "market360_pins_shareable_v1";
+    // Draft edits stored locally (then you Export → commit to pins.json)
+    const LOCAL_STORAGE_KEY = "market360_pins_shareable_v2";
 
     // =========================
     // Map + baselayers
     // =========================
     const map = L.map("map").setView([37.7749, -122.4194], 13);
 
+    // Keep your preferred gray look
     const grayBase = L.tileLayer(
       "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
       { maxZoom: 20, attribution: "© OpenStreetMap contributors © CARTO" }
@@ -112,29 +113,26 @@
     // =========================
     // UI elements
     // =========================
-    const statusEl   = document.getElementById("status");
-    const modePill   = document.getElementById("modePill");
-
-    const urlInput   = document.getElementById("urlInput");
-    const titleInput = document.getElementById("titleInput");
-    const force360El = document.getElementById("force360");
-    const addPinBtn  = document.getElementById("addPinBtn");
-
-    const reloadBtn  = document.getElementById("reloadBtn");
-    const exportBtn  = document.getElementById("exportBtn");
-    const importBtn  = document.getElementById("importBtn");
-    const importInput= document.getElementById("importInput");
-    const clearBtn   = document.getElementById("clearBtn");
-
-    // author mode
-    const fileInput  = document.getElementById("fileInput");
+    const statusEl    = document.getElementById("status");
+    const modePill    = document.getElementById("modePill");
+    const urlInput    = document.getElementById("urlInput");
+    const titleInput  = document.getElementById("titleInput");
+    const force360El  = document.getElementById("force360");
+    const addPinBtn   = document.getElementById("addPinBtn");
+    const reloadBtn   = document.getElementById("reloadBtn");
+    const exportBtn   = document.getElementById("exportBtn");
+    const importBtn   = document.getElementById("importBtn");
+    const importInput = document.getElementById("importInput");
+    const clearBtn    = document.getElementById("clearBtn");
+    const fileInput   = document.getElementById("fileInput");
 
     // =========================
     // State
     // =========================
     let pinData = [];
     const markerById = new Map();
-    let mode = null; // {type:"place-new", url, title, isPano?} or {type:"edit", pinId}
+    let mode = null; // {type:"place-new", pinDraft} or {type:"edit", pinId}
+    let manualQueue = []; // pins waiting for click placement
 
     // Prevent multi-tab opens
     let lastOpenTs = 0;
@@ -172,7 +170,8 @@
       map.getContainer().style.cursor = "crosshair";
 
       if (mode.type === "place-new") {
-        modePill.textContent = "Click map to place pin (Esc cancels)";
+        const t = mode.pinDraft?.title || mode.pinDraft?.name || "photo";
+        modePill.textContent = `Click map to place: ${t}  (Esc cancels)`;
       } else if (mode.type === "edit") {
         modePill.textContent = "Click new location (Esc cancels)";
       }
@@ -199,16 +198,16 @@
     function normalizeUrlOrFilename(input) {
       const v = (input || "").trim();
       if (!v) return null;
+
       // If user types just "R0010254.JPG", use PHOTOS_BASE
       if (!v.includes("/") && !v.startsWith("http://") && !v.startsWith("https://")) {
         return PHOTOS_BASE + encodeURIComponent(v);
       }
-      // If it looks like relative path, keep it
+
       return v;
     }
 
     async function detectPanoramaFromUrl(url) {
-      // Heuristic: equirectangular typically ~2:1 aspect
       return new Promise((resolve) => {
         const img = new Image();
         img.onload = () => {
@@ -255,6 +254,10 @@
       w.document.open();
       w.document.write(html);
       w.document.close();
+    }
+
+    function findPinByUrl(url) {
+      return pinData.find(p => p && p.url === url) || null;
     }
 
     function buildPopupHtml(pin) {
@@ -346,9 +349,6 @@
     }
 
     async function bootLoadPins() {
-      // Priority:
-      // 1) local draft pins (your edits)
-      // 2) pins.json from GitHub
       const localDraft = loadLocalDraftPins();
       if (localDraft && localDraft.length) {
         pinData = cleanPins(localDraft);
@@ -369,11 +369,39 @@
       statusEl.textContent = "No pins loaded (no local draft, and pins.json missing/unreachable)";
     }
 
+    function startManualQueue(queueItems) {
+      manualQueue = queueItems.slice();
+
+      if (!manualQueue.length) {
+        setMode(null);
+        return;
+      }
+
+      const next = manualQueue.shift();
+      setMode({ type: "place-new", pinDraft: next });
+      statusEl.textContent = `No GPS: click map to place "${next.name}" (${manualQueue.length + 1} remaining)`;
+    }
+
+    function continueManualQueueIfAny() {
+      if (!manualQueue.length) {
+        setMode(null);
+        statusEl.textContent = "Manual placement complete.";
+        return;
+      }
+      const next = manualQueue.shift();
+      setMode({ type: "place-new", pinDraft: next });
+      statusEl.textContent = `No GPS: click map to place "${next.name}" (${manualQueue.length + 1} remaining)`;
+    }
+
     // =========================
     // Events
     // =========================
     window.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") setMode(null);
+      if (e.key === "Escape") {
+        manualQueue = [];
+        setMode(null);
+        statusEl.textContent = "Cancelled.";
+      }
     });
 
     reloadBtn.addEventListener("click", async () => {
@@ -441,16 +469,20 @@
       let isPano = force360El.checked;
 
       if (!isPano) {
-        // Try to auto-detect (works best for same-origin images in /photos/)
         statusEl.textContent = "Detecting 360…";
         isPano = await detectPanoramaFromUrl(url);
       }
 
-      setMode({ type: "place-new", url, title, isPano });
+      setMode({ type: "place-new", pinDraft: {
+        id: ensureId(),
+        name: title || (url.split("/").pop() || "Photo"),
+        title,
+        url,
+        isPano
+      }});
       statusEl.textContent = "Click map to place the pin…";
     });
 
-    // Single popup click handler binding
     map.on("popupopen", (e) => {
       const el = e.popup.getElement();
       if (!el) return;
@@ -461,17 +493,16 @@
         const img = evt.target?.classList?.contains("popup-img") ? evt.target : null;
         const a = evt.target.closest ? evt.target.closest("a") : null;
 
-        // image click
         if (img) {
           evt.preventDefault();
           evt.stopPropagation();
 
-          const action = img.getAttribute("data-action");
           const idEl = el.querySelector('a[data-action="editLoc"]');
           const pinId = idEl ? idEl.getAttribute("data-id") : null;
           const pin = pinData.find(p => p.id === pinId);
           if (!pin) return;
 
+          const action = img.getAttribute("data-action");
           if (action === "open360") {
             openPannellumViewer(pin.url, pin.title || pin.name);
           } else {
@@ -497,6 +528,7 @@
         if (actionA === "editLoc") {
           evt.preventDefault();
           evt.stopPropagation();
+          manualQueue = [];
           setMode({ type: "edit", pinId: id });
           e.popup.close();
           return;
@@ -517,10 +549,8 @@
           pin.title = (newTitle || "").trim();
           pin.url = normalized;
 
-          // (optional) keep isPano as-is unless forced
           saveLocalDraftPins();
           renderAllPins();
-          // reopen popup for same marker
           const marker = markerById.get(pin.id);
           if (marker) marker.openPopup();
           return;
@@ -534,15 +564,37 @@
       const { lat, lng } = evt.latlng;
 
       if (mode.type === "place-new") {
+        const d = mode.pinDraft;
+        if (!d || !d.url) { setMode(null); return; }
+
+        // If a pin with same URL already exists, treat this as "set location" (avoid duplicates)
+        const existing = findPinByUrl(d.url);
+        if (existing) {
+          existing.lat = lat;
+          existing.lng = lng;
+          existing.title = d.title || existing.title;
+          existing.isPano = (typeof d.isPano === "boolean") ? d.isPano : existing.isPano;
+          existing.ts = Date.now();
+          saveLocalDraftPins();
+          renderAllPins();
+          setMode(null);
+          const marker = markerById.get(existing.id);
+          if (marker) marker.openPopup();
+          statusEl.textContent = `Placed existing photo: "${existing.name}"`;
+          continueManualQueueIfAny();
+          return;
+        }
+
         const pin = {
-          id: ensureId(),
-          name: (mode.title || "").trim() || (mode.url.split("/").pop() || "Photo"),
-          title: (mode.title || "").trim(),
-          url: mode.url,
+          id: d.id || ensureId(),
+          name: d.name || (d.url.split("/").pop() || "Photo"),
+          title: (d.title || "").trim(),
+          url: d.url,
           lat, lng,
-          isPano: !!mode.isPano,
+          isPano: !!d.isPano,
           ts: Date.now()
         };
+
         pinData.push(pin);
         saveLocalDraftPins();
         renderAllPins();
@@ -551,8 +603,11 @@
         const marker = markerById.get(pin.id);
         if (marker) marker.openPopup();
 
-        statusEl.textContent = "Pinned.";
+        statusEl.textContent = `Pinned "${pin.name}"`;
         map.setView([lat, lng], Math.max(map.getZoom(), 18));
+
+        // If this came from the no-GPS queue, proceed to next
+        continueManualQueueIfAny();
         return;
       }
 
@@ -576,51 +631,84 @@
     });
 
     // =========================
-    // Author mode: local JPGs -> read GPS -> create pins with hosted URL
+    // Choose Files: GPS auto-pin + No-GPS -> click-to-place queue
     // =========================
     fileInput.addEventListener("change", async (event) => {
       const files = Array.from(event.target.files || []);
       if (!files.length) return;
 
-      let added = 0;
-      let noGps = 0;
+      let addedGps = 0;
+      let queuedManual = 0;
+
+      const queue = [];
 
       for (const file of files) {
         const name = file.name;
         const hostedUrl = PHOTOS_BASE + encodeURIComponent(name);
 
+        // Detect pano (best-effort) using hosted URL
+        let isPano = false;
+        try { isPano = await detectPanoramaFromUrl(hostedUrl); } catch {}
+
         try {
           const gps = await exifr.gps(file);
           if (gps && gps.latitude && gps.longitude) {
-            // Try detect pano by filename heuristic (fast) + optionally by hosted url
-            let isPano = false;
-            try { isPano = await detectPanoramaFromUrl(hostedUrl); } catch {}
-            pinData.push({
+            // If already exists (same hosted url), update coords instead of duplicating
+            const existing = findPinByUrl(hostedUrl);
+            if (existing) {
+              existing.lat = gps.latitude;
+              existing.lng = gps.longitude;
+              existing.isPano = isPano;
+              existing.ts = Date.now();
+            } else {
+              pinData.push({
+                id: ensureId(),
+                name,
+                title: "",
+                url: hostedUrl,
+                lat: gps.latitude,
+                lng: gps.longitude,
+                isPano,
+                ts: Date.now()
+              });
+            }
+            addedGps++;
+          } else {
+            queue.push({
               id: ensureId(),
               name,
               title: "",
               url: hostedUrl,
-              lat: gps.latitude,
-              lng: gps.longitude,
-              isPano,
-              ts: Date.now()
+              isPano
             });
-            added++;
-          } else {
-            noGps++;
+            queuedManual++;
           }
         } catch {
-          noGps++;
+          queue.push({
+            id: ensureId(),
+            name,
+            title: "",
+            url: hostedUrl,
+            isPano
+          });
+          queuedManual++;
         }
       }
 
       saveLocalDraftPins();
       renderAllPins({ fit: true });
 
-      statusEl.textContent =
-        added ? `Added ${added} GPS pin(s).` : "No GPS pins added.";
-      if (noGps) {
-        alert(`${noGps} file(s) had no GPS. For those, use the URL/filename box and “Add pin (click map)”.`);
+      if (addedGps && !queuedManual) {
+        statusEl.textContent = `Added/updated ${addedGps} GPS pin(s).`;
+      } else if (addedGps && queuedManual) {
+        statusEl.textContent = `Added/updated ${addedGps} GPS pin(s). ${queuedManual} need manual placement.`;
+      } else if (!addedGps && queuedManual) {
+        statusEl.textContent = `${queuedManual} photo(s) have no GPS. Click map to place them.`;
+      }
+
+      // Start manual placement queue automatically
+      if (queue.length) {
+        startManualQueue(queue);
       }
 
       fileInput.value = "";
