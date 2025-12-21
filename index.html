@@ -259,6 +259,7 @@
         ${pano && url ? `<a href="${viewerUrl}" target="_blank" rel="noopener">Open 360 viewer (new tab)</a>` : ""}
         ${url ? `<a href="${safeUrl}" target="_blank" rel="noopener">Open raw image</a>` : ""}
         <a href="#" data-action="edit" data-id="${escapeHtml(pin.id)}">Edit location</a>
+<a href="#" data-action="delete" data-id="${escapeHtml(pin.id)}">Remove pin</a>
       </div>
     `;
 
@@ -344,22 +345,51 @@
   }
 
   // -------------------------
-  // "Edit location" link handler
+// "Edit location" + "Remove pin" link handler
   // -------------------------
-  document.addEventListener("click", (evt) => {
-    const a = evt.target.closest ? evt.target.closest("[data-action]") : null;
-    if (!a) return;
-    const action = a.getAttribute("data-action");
-    if (action === "edit") {
-      evt.preventDefault();
-      evt.stopPropagation();
-      const id = a.getAttribute("data-id");
-      if (!id) return;
-      manualQueue = [];
-      setMode({ type: "edit", pinId: id });
-      statusEl.textContent = "Click map to set new location…";
+document.addEventListener("click", (evt) => {
+  const a = evt.target.closest ? evt.target.closest("[data-action]") : null;
+  if (!a) return;
+
+  const action = a.getAttribute("data-action");
+  const id = a.getAttribute("data-id");
+  if (!action || !id) return;
+
+  if (action === "edit") {
+    evt.preventDefault();
+    evt.stopPropagation();
+    manualQueue = [];
+    setMode({ type: "edit", pinId: id });
+    statusEl.textContent = "Click map to set new location…";
+    return;
+  }
+
+  if (action === "delete") {
+    evt.preventDefault();
+    evt.stopPropagation();
+
+    const pin = pinData.find(p => p.id === id);
+    const name = (pin?.fileName || pin?.title || "this pin");
+
+    if (!confirm(`Remove "${name}" from the map?`)) return;
+
+    // remove from data
+    pinData = pinData.filter(p => p.id !== id);
+    saveLocal();
+
+    // remove marker from map
+    const m = markerById.get(id);
+    if (m) {
+      try { map.removeLayer(m); } catch {}
+      markerById.delete(id);
     }
-  });
+
+    setMode(null);
+    statusEl.textContent = `Removed "${name}".`;
+    return;
+  }
+});
+
 
   // -------------------------
   // Map click to place/edit
