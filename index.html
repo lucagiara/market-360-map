@@ -85,17 +85,28 @@
   // -------------------------
   // Map + optional satellite toggle
   // -------------------------
-  const map = L.map("map", { zoomControl: true }).setView([37.7895, -122.401], 17);
+const map = L.map("map", {
+  zoomControl: true,
+  maxZoom: 22
+}).setView([37.7895, -122.401], 17);
 
   const baseLight = L.tileLayer(
     "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
-    { attribution: '&copy; OpenStreetMap contributors &copy; CARTO' }
+  {
+    attribution: '&copy; OpenStreetMap contributors &copy; CARTO',
+    maxZoom: 22,
+    maxNativeZoom: 19
+  }
   ).addTo(map);
 
-  const sat = L.tileLayer(
-    "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-    { attribution: "Tiles &copy; Esri" }
-  );
+const sat = L.tileLayer(
+  "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+  {
+    attribution: "Tiles &copy; Esri",
+    maxZoom: 22,
+    maxNativeZoom: 19
+  }
+);
 
   L.control.layers(
     { "Map (default)": baseLight, "Satellite": sat },
