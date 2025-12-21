@@ -69,7 +69,7 @@
     <div class="row">
       <label>Author mode:</label>
       <input id="fileInput" type="file" accept="image/jpeg,image/jpg" multiple />
-      <span class="hint">Select JPGs. GPS photos auto-pin. No-GPS photos will immediately ask you to click the map to place them (with preview).</span>
+      <span class="hint">Select JPGs. GPS photos auto-pin. No-GPS photos will ask you to click the map to place them.</span>
     </div>
   </div>
 
@@ -83,17 +83,15 @@
   const PINS_JSON_URL = "pins.json"; // in repo root
 
   // -------------------------
-  // Map (keep your current style) + optional satellite toggle
+  // Map + optional satellite toggle
   // -------------------------
   const map = L.map("map", { zoomControl: true }).setView([37.7895, -122.401], 17);
 
-  // Your current light basemap (CARTO Positron) — keep this as default
   const baseLight = L.tileLayer(
     "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
     { attribution: '&copy; OpenStreetMap contributors &copy; CARTO' }
   ).addTo(map);
 
-  // Optional satellite overlay (Esri World Imagery) — toggle on/off
   const sat = L.tileLayer(
     "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
     { attribution: "Tiles &copy; Esri" }
@@ -123,12 +121,11 @@
   importInput.style.display = "none";
   document.body.appendChild(importInput);
 
-  let pinData = [];                 // array of pins
+  let pinData = [];
   let mode = null;                  // {type:"place", draft:{...}} or {type:"edit", pinId:"..."}
-  let manualQueue = [];             // queue for no-GPS photos
+  let manualQueue = [];
   const markerById = new Map();
 
-  // Local session previews (only available in same browser session)
   const previewUrlByHosted = new Map(); // hostedUrl -> blobUrl
   const panoByHosted = new Map();       // hostedUrl -> boolean
   let sessionObjectUrls = [];
@@ -138,12 +135,32 @@
   // -------------------------
   function setMode(m) {
     mode = m;
+
+    const container = map.getContainer();
+
     if (!mode) {
       modePill.textContent = "Ready";
+      container.style.cursor = "grab";
+      map.dragging.enable();
+      map.doubleClickZoom.enable();
       return;
     }
-    if (mode.type === "place") modePill.textContent = "Place pin: click map";
-    if (mode.type === "edit") modePill.textContent = "Edit pin: click map";
+
+    if (mode.type === "place") {
+      modePill.textContent = "Place pin: click map";
+      container.style.cursor = "crosshair"; // 🎯
+      map.dragging.disable();
+      map.doubleClickZoom.disable();
+      return;
+    }
+
+    if (mode.type === "edit") {
+      modePill.textContent = "Edit pin: click map";
+      container.style.cursor = "crosshair"; // 🎯
+      map.dragging.disable();
+      map.doubleClickZoom.disable();
+      return;
+    }
   }
 
   function uid() {
@@ -182,22 +199,9 @@
     }[c]));
   }
 
-  function normalizeToHostedUrl(fileOrUrl) {
-    const s = String(fileOrUrl || "").trim();
-    if (!s) return "";
-    if (s.startsWith("http://") || s.startsWith("https://")) return s;
-    if (s.startsWith("photos/")) return s;
-    return PHOTOS_BASE + s; // just filename -> photos/<filename>
-  }
-
   function is360ForPin(pin) {
-    // If the pin is marked, use that
     if (pin && pin.is360 === true) return true;
-
-    // Otherwise, if we have a session detection result for this hosted URL, use it
     if (pin && pin.url && panoByHosted.get(pin.url) === true) return true;
-
-    // Fallback: guess by filename / common 360 naming (optional)
     return false;
   }
 
@@ -209,7 +213,6 @@
         const h = img.naturalHeight || img.height;
         if (!w || !h) return resolve(false);
         const r = w / h;
-        // Equirectangular usually ~2:1
         resolve(r > 1.85 && r < 2.15);
       };
       img.onerror = () => resolve(false);
@@ -233,13 +236,10 @@
     const safeUrl = escapeHtml(url);
     const hasUrl = !!url;
 
-    // Use session preview if available; otherwise use hosted URL
     const localPreview = hasUrl ? previewUrlByHosted.get(url) : null;
     const imgSrc = localPreview || (hasUrl ? url : "");
 
     const pano = is360ForPin(pin);
-
-    // IMPORTANT: Open 360 viewer in new tab using viewer.html query params
     const viewerUrl = "viewer.html?img=" + encodeURIComponent(url) + "&title=" + encodeURIComponent(title);
 
     const note = !imgSrc ? `
@@ -274,7 +274,7 @@
   }
 
   // -------------------------
-  // Markers
+  // Markers (DRAGGABLE)
   // -------------------------
   function addOrUpdateMarker(pin) {
     const html = buildPopupHtml(pin);
@@ -284,7 +284,23 @@
       existing.setPopupContent(html);
       return existing;
     }
-    const m = L.marker([pin.lat, pin.lng]).addTo(map).bindPopup(html);
+
+    const m = L.marker([pin.lat, pin.lng], { draggable: true })
+      .addTo(map)
+      .bindPopup(html);
+
+    // ✅ Dragging always updates stored location (GPS pins + manual pins)
+    m.on("dragend", () => {
+      const ll = m.getLatLng();
+      const idx = pinData.findIndex(p => p.id === pin.id);
+      if (idx >= 0) {
+        pinData[idx].lat = ll.lat;
+        pinData[idx].lng = ll.lng;
+        saveLocal();
+        m.setPopupContent(buildPopupHtml(pinData[idx]));
+      }
+    });
+
     markerById.set(pin.id, m);
     return m;
   }
@@ -303,7 +319,7 @@
   }
 
   // -------------------------
-  // Manual queue for no-GPS photos (automatic flow)
+  // Manual queue for no-GPS photos
   // -------------------------
   function startManualQueue(queue) {
     manualQueue = queue.slice();
@@ -328,8 +344,7 @@
   }
 
   // -------------------------
-  // Global click handler for "Edit location"
-  // (prevents multi-tab bug — we are NOT opening new windows from JS)
+  // "Edit location" link handler
   // -------------------------
   document.addEventListener("click", (evt) => {
     const a = evt.target.closest ? evt.target.closest("[data-action]") : null;
@@ -360,10 +375,10 @@
       const pin = {
         id: uid(),
         lat, lng,
-        url: d.url,                 // hosted path: photos/<filename>
+        url: d.url,
         title: d.title || "",
         fileName: d.fileName || "",
-        is360: d.is360 === true,     // store 360 detection on pin
+        is360: d.is360 === true,
         ts: Date.now()
       };
       pinData.push(pin);
@@ -398,7 +413,7 @@
   });
 
   // -------------------------
-  // Load pins.json (published) OR local storage (draft)
+  // Load pins.json OR local draft
   // -------------------------
   async function loadFromPinsJson() {
     try {
@@ -438,7 +453,6 @@
   });
 
   exportBtn.addEventListener("click", () => {
-    // Export exactly what should be published
     const blob = new Blob([JSON.stringify(pinData, null, 2)], { type:"application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -449,7 +463,7 @@
     a.remove();
     URL.revokeObjectURL(url);
 
-    alert('Exported pins.json.\n\nTo publish on GitHub Pages:\n1) Upload your images into /photos/\n2) Replace pins.json in the repo with this exported file\n3) Commit\n\nThen Safari + Chrome will match.');
+    alert('Exported pins.json.\n\nTo publish on GitHub Pages:\n1) Upload your images into /photos/\n2) Replace pins.json in the repo with this exported file\n3) Commit + Push');
   });
 
   importBtn.addEventListener("click", () => importInput.click());
@@ -497,16 +511,14 @@
   });
 
   // -------------------------
-  // Choose Files (author mode)
+  // Choose Files
   // GPS => auto pin
-  // No GPS => immediately queue -> click map to place (automatic)
-  // 360 detection => stored on pin
+  // No GPS => queue -> click map to place
   // -------------------------
   fileInput.addEventListener("change", async (event) => {
     const files = Array.from(event.target.files || []);
     if (!files.length) return;
 
-    // Keep previews for this session (so popup shows image even before you upload to /photos/)
     clearSessionPreviews();
 
     let addedGps = 0;
@@ -514,7 +526,7 @@
 
     // Build session previews + pano detection first
     for (const file of files) {
-      const hostedUrl = PHOTOS_BASE + file.name;  // DO NOT rename; use camera filename
+      const hostedUrl = PHOTOS_BASE + file.name;
       const blobUrl = URL.createObjectURL(file);
       sessionObjectUrls.push(blobUrl);
       previewUrlByHosted.set(hostedUrl, blobUrl);
@@ -551,15 +563,13 @@
     }
 
     saveLocal();
-    renderAllPins(true);
+
+    // ✅ Do NOT auto-fit/jump the map while you’re about to place no-GPS pins
+    renderAllPins(false);
 
     if (addedGps) statusEl.textContent = `${addedGps} photo(s) pinned from GPS`;
-    if (noGpsQueue.length) {
-      // Automatically start placement mode for the non-GPS photos
-      startManualQueue(noGpsQueue);
-    } else {
-      statusEl.textContent = `${addedGps} photo(s) pinned from GPS`;
-    }
+    if (noGpsQueue.length) startManualQueue(noGpsQueue);
+    else statusEl.textContent = `${addedGps} photo(s) pinned from GPS`;
   });
 
   // -------------------------
@@ -569,7 +579,6 @@
     setMode(null);
     await loadFromPinsJson();
   })();
-
 </script>
 </body>
-</html> 
+</html>
